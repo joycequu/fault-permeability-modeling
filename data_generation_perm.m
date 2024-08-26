@@ -113,18 +113,6 @@ for combo = 1 : 4
                                             % to false in that case).
             Nsim              = 200;       % Number of 3D simulations/realizations
             
-
-            % Need to save output for each variation of input
-
-            % faults{i}.Grid.units
-            % units = cell(Nsim, 1);
-            % perm will be an array
-            % perm = zeros(Nsim, 3);
-            % faultPerm = [0, 0, 0];
-
-            perm_data = cell(Nsim, 4);
-
-
             % 2.4 Define Stratigraphy and FaultedSection objects
             % Organize the input parameters in HW and FW, and use that info to create a 
             % FaultedSection object which contains all required information.
@@ -161,6 +149,13 @@ for combo = 1 : 4
             nSeg_fcn = nSeg.fcn;
             U_flex = U.flexible;
             tstart = tic;
+
+            % Need to save output for each variation of input
+            perm_data = cell(Nsim, 4);
+            units_data = cell(Nsim, 1);
+            % upscale permeability saved for sorting purposes
+            upscale_perm = zeros(Nsim, 3);
+
             parfor n=1:Nsim    % parfor allowed if you have the parallel computing toolbox
             %for n=1
             % Instantiate fault section and get segmentation for this realization
@@ -190,9 +185,6 @@ for combo = 1 : 4
                             temp_perm{w} = zeros(nx, nz, 16);
                         end
                         % [perm_data{n,:}] = deal(zeros(nx, nz, 16)); % preallocate each 3D matrix for a given realization n
-                        % for w = 1:4
-                        %        perm_data{n, w} = zeros(nx, nz, 16); % Assuming 16 is the number of layers in the 3rd dimension (k)
-                        % end
                     end
         
                     % Generate smear object with T, Tap, L, Lmax
@@ -208,15 +200,10 @@ for combo = 1 : 4
                     faultSections{n}{k} = myFaultSection;
                     smears{n}{k} = smear;
                     
-                    % perm_data{n, 1}(:, :, k) = reshape(myFaultSection.Grid.perm(:,1), nx, nz); % kxx
-                    % perm_data{n, 2}(:, :, k) = reshape(myFaultSection.Grid.permy, nx, nz); % kyy
-                    % perm_data{n, 3}(:, :, k) = reshape(myFaultSection.Grid.perm(:,3), nx, nz); % kzz
-                    % perm_data{n, 4}(:, :, k) = reshape(myFaultSection.Grid.perm(:,2), nx, nz); % kxz
-
-                    temp_perm{1}(:, :, k) = reshape(myFaultSection.Grid.perm(:,1), nx, nz);
-                    temp_perm{2}(:, :, k) = reshape(myFaultSection.Grid.perm(:,2), nx, nz);
-                    temp_perm{3}(:, :, k) = reshape(myFaultSection.Grid.perm(:,3), nx, nz);
-                    temp_perm{4}(:, :, k) = reshape(myFaultSection.Grid.perm(:,4), nx, nz);
+                    temp_perm{1}(:, :, k) = reshape(myFaultSection.Grid.perm(:,1), nx, nz); % kxx
+                    temp_perm{2}(:, :, k) = reshape(myFaultSection.Grid.permy, nx, nz); % kyy
+                    temp_perm{3}(:, :, k) = reshape(myFaultSection.Grid.perm(:,3), nx, nz); % kzz
+                    temp_perm{4}(:, :, k) = reshape(myFaultSection.Grid.perm(:,2), nx, nz); % kxz
  
                 end
 
@@ -239,27 +226,56 @@ for combo = 1 : 4
                 % perms{n} = myFault.Grid.perms;
                 % perm(n, :) = myFault.Perm;
 
+                upscale_perm(n, :) = log10(myFault.Perm/(milli*darcy));
                 perm_data(n, :) = temp_perm;
+                units_data{n} = myFault.Grid.units;
 
             end
             % end of the Nsim
 
-            % all_ee(l, combo, d, :) = faultPerm / Nsim;
-            % if d == 1
-            %     pbase = faultPerm;
-            % else
-            %     faultPerm = (faultPerm - pbase)/delta(d, d-1);
-            %     all_ee(l, combo, d-1, :) = faultPerm;
-            % end
+            upscale_perm_indexed = [(1:Nsim)', zeros(Nsim, 1), zeros(Nsim, 1), zeros(Nsim, 1), zeros(Nsim, 1)];
+            upscale_perm_index(:, 2:4) = upscale_perm;
+            
+            % 9 - kxx - P10, Median, P90; kyy - ...; kzz - ...
+            perm_output = cell(9, 4);
+            units_output = cell(9, 1);
+            upscale_perm_output = zeros(9, 3);
+
+            for dim = 2 : 4
+                sorted_upscale_perm = sortrows(upscale_perm_indexed, dim);
+                p10_index = sorted_upscale_perm(Nsim * 10, 1);
+                p50_index = sorted_upscale_perm(Nsim * 50, 1);
+                p90_index = sorted_upscale_perm(Nsim * 90, 1);
+                % save to permeability output
+                perm_output((dim-2)*3 + 1) = perm_data(p10_index, :);
+                perm_output((dim-2)*3 + 2) = perm_data(p50_index, :);
+                perm_output((dim-2)*3 + 3) = perm_data(p90_index, :);
+                % save to units output
+                units_output((dim-2)*3 + 1) = units_data{p10_index};
+                units_output((dim-2)*3 + 2) = units_data{p50_index};
+                units_output((dim-2)*3 + 3) = units_data{p90_index};
+                % save to upscale permeability output
+                upscale_perm_output((dim-2)*3 + 1, :) = upscale_perm(p10_index, :);
+                upscale_perm_output((dim-2)*3 + 2, :) = upscale_perm(p50_index, :);
+                upscale_perm_output((dim-2)*3 + 3, :) = upscale_perm(p90_index, :);
+            end
+
+            inputs = cell(6, 1);
+            inputs{1} = thickness;
+            inputs{2} = vcl;
+            inputs{3} = dip;
+            inputs{4} = faultDip;
+            inputs{5} = zf;
+            inputs{6} = zmax;
 
             telapsed = toc(tstart);
 
-            filename = strcat("data_3layer_seq_perm", num2str(seq_num), ".mat");
+            filename = strcat("data_3layer_seq_full_", num2str(seq_num), ".mat");
             seq_num = seq_num + 1;
 
-            save(filename, 'thickness', 'vcl', 'dip', 'faultDip', 'zf', 'zmax', 'perm_data'); % removed 'units'
+            save(filename, 'inputs', 'perm_output', 'units_output', 'upscale_perm_output'); % removed 'units'
 
-            clear nz nz myFault perm_data
+            clear nx nz myFault perm_output units_output upscale_perm_output upscale_perm upscale_perm_index perm_data units_data inputs
         end
         % end of loop for different parameters for each run
     end
